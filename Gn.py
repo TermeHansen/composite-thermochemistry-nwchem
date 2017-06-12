@@ -198,6 +198,34 @@ class Gn_common(object):
 
         return result
 
+    def geom_get_coords(self):
+        keys = [nwchem.rtdb_first()]
+        while True:
+            try:
+                keys.append(nwchem.rtdb_next())
+            except nwchem.NWChemError:
+                break
+
+        ckey = [k for k in keys if "coords" in k and "geometry" in k][0]
+        tkey = [k for k in keys if "tags" in k and "geometry" in k][0]
+        ukey = [k for k in keys if "user units" in k and "geometry" in k][0]
+        coords = nwchem.rtdb_get(ckey)
+        tags = nwchem.rtdb_get(tkey)
+        units = nwchem.rtdb_get(ukey)
+
+        if (units == 'a.u.'):
+            factor = 1.0
+        elif (units == 'angstroms'):
+            factor = 1.8897259885789
+        else: factor=1.0
+
+        coords=[c/factor for c in coords]
+        xyzout=open('last.xyz','w')
+        xyzout.write(str(len(tags))+'\n\n')
+        for i,t in enumerate(tags):
+            xyzout.write("{}      {:16.6f}  {:16.6f}  {:16.6f}\n".format(t,*coords[i*3:i*3+3]) )
+        xyzout.close()
+
     def is_molecule(self):
         """Determine if this is a molecular system (more than 1 atom)
 
@@ -725,7 +753,7 @@ class G4_mp2(Gn_common):
             ("    DE(MP2)           = % 12.6f   DE(HF)            = % 12.6f" % (dMP2, dHF)),
             ("    ZPE(B3LYP)        = % 12.6f   ZPE SCALE FACTOR  = % 12.6f" % (Szpe, self.ZPEScaleFactor)),
             ("    HLC               = % 12.6f   FREE ENERGY       = % 12.6f" % (self.Ehlc, 0.0)),
-            ("    THERMAL ENERGY    = % 12.6f   THERMAL ENTHALPY  = % 12.6f" % (self.Ethermal, self.Hthermal)),
+            ("    THERMAL ENERGY    = % 12.6f   Thermal Enthalpy  = % 12.6f" % (self.Ethermal, self.Hthermal)),
             ("    ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~"),
             ("    E(G4(MP2)) @ 0K   = % 12.6f   E(G4(MP2)) @298K  = % 12.6f" % (self.E0, self.E298)),
             ("    H(G4(MP2))        = % 12.6f   G(G4(MP2))        = % 12.6f" % (self.H298, 0.0)),
@@ -1180,6 +1208,8 @@ class G4_mp2(Gn_common):
         et=time.time()-t0
         self.report("\nWall: %.2f seconds" % et)
 
+        self.geom_get_coords()
+
         self.report_all()
 
 class G3_mp2(Gn_common):
@@ -1243,6 +1273,7 @@ class G3_mp2(Gn_common):
         self.say('optimize.')
         self.send_nwchem_cmd("scf; maxiter 99; end")
         self.send_nwchem_cmd("driver; maxiter 99; xyz {0}; end".format(self.geohash))
+#        self.send_nwchem_cmd("driver; maxiter 99; gmax 0.0005; xyz {0}; end".format(self.geohash))
 
         self.basis_prepare("6-31G*", output="6-31G*", coordinates="cartesian")
         scfcmd = self.build_SCF_cmd()
@@ -1656,4 +1687,7 @@ class G3_mp2(Gn_common):
         et=time.time()-t0
         self.report("\nWall: %.2f seconds" % et)
 
+        self.geom_get_coords()
+
         self.reportAll()
+        

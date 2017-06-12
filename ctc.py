@@ -11,6 +11,7 @@ import time
 import csv
 import pprint
 import fcntl
+import psutil
 
 def _make_fd_blocking(file_obj):
     """
@@ -56,7 +57,7 @@ task python
 
 class Runner(object):
     models = ["g3mp2-ccsdt", "g3mp2-qcisdt", "g4mp2", "gn-g3mp2-ccsdt",
-              "gn-g3mp2-qcisdt", "gn-g4mp2"]
+              "gn-g3mp2-qcisdt", "gn-g4mp2","hflabs"]
     def __init__(self, model, geofile, charge, multiplicity, nproc, memory,
                  tmpdir, verbose, noclean, force):
         self.atoms = []
@@ -72,6 +73,7 @@ class Runner(object):
         self.noclean = noclean
         self.force = force
         self.start_time = time.time()
+        self.toscreen = True
 
     def prime_atoms(self, geofile):
         """Get list of atoms from geometry input.
@@ -179,6 +181,14 @@ model.run()""".format(charge=self.charge, mult=repr(self.multiplicity), cache=in
 model=Gn.G3_mp2(charge={charge}, multiplicity={mult}, integral_memory_cache={cache}, use_qcisdt=True, force_c1_symmetry={force}, noautoz={noautoz})
 model.run()""".format(charge=self.charge, mult=repr(self.multiplicity), cache=integral_cache, force=force_c1_symmetry, noautoz=noautoz)
 
+        #hflabs 1st attempt
+        elif self.model == "hflabs":
+            integral_cache = int(memory_per_core * 2 ** 20 * 0.4)
+            pymodel = "Gn.py"
+            m = """import Gn
+model=Gn.hflabs(charge={charge}, multiplicity={mult}, integral_memory_cache={cache}, force_c1_symmetry={force}, noautoz={noautoz})
+model.run()""".format(charge=self.charge, mult=repr(self.multiplicity), cache=integral_cache, force=force_c1_symmetry, noautoz=noautoz)
+
         deck = tpl.format(startname=startname, memory=memory_per_core,
                           jobname=jobname,
                           structure=os.path.basename(self.geofile),
@@ -186,11 +196,12 @@ model.run()""".format(charge=self.charge, mult=repr(self.multiplicity), cache=in
         
         tmpdir = self.tmpdir + jobname
         deckfile = jobname + ".nw"
-        jsfile = deckfile[:-3] + ".js"
+        jsfile = '/home/termo/Nwchem/Enthalpy/js/'+deckfile[:-3] + ".js"
         logfile = deckfile[:-3] + ".log"
         log_location = tmpdir + "/" + logfile
-
-        return {"deck" : deck, "pymodel" : pymodel, "geometry" : self.geofile,
+        cc_src='/home/termo/Nwchem/composite-thermochemistry-nwchem/'
+		
+        return {"deck" : deck, "pymodel" : cc_src+pymodel, "geometry" : os.path.abspath(self.geofile),
                 "jobname" : jobname, "jsfile" : jsfile, "tmpdir" : tmpdir,
                 "deckfile" : deckfile, "logfile" : logfile,
                 "log_location" : log_location,
@@ -227,7 +238,8 @@ model.run()""".format(charge=self.charge, mult=repr(self.multiplicity), cache=in
         else:
             redirector = "&> "
 
-        runner = "cd {0} && mpirun -np {1} nwchem {2} {3} {4}".format(tmpdir, self.nproc, deckfile, redirector, logfile)
+#        runner = "cd {0} && mpirun -np {1} nwchem {2} {3} {4}".format(tmpdir, self.nproc, deckfile, redirector, logfile)
+        runner = "cd {0} && mpirun -np {1} nwchem-6.6 {2} {3} {4}".format(tmpdir, self.nproc, deckfile, redirector, logfile)
 
         banner = self.get_banner("Running:")
         print(banner)
@@ -317,7 +329,8 @@ model.run()""".format(charge=self.charge, mult=repr(self.multiplicity), cache=in
             with open(jobdata["jsfile"]) as jsin:
                 serialized = jsin.read()
             deserialized = json.loads(serialized)
-            print(deserialized["summary"])
+            if self.toscreen:
+                print(deserialized["summary"])
             return deserialized
 
         else:
@@ -341,9 +354,11 @@ model.run()""".format(charge=self.charge, mult=repr(self.multiplicity), cache=in
                 extracting = False
 
         summary = "".join(extracted)
-        print(summary)
+        if self.toscreen:
+            print(summary)
 
         #Job ran to expected completion
+        
         if summary:
             parsed = self.parse_summary(summary)
             records = {"summary" : summary, "multiplicity" : self.multiplicity,
@@ -354,6 +369,8 @@ model.run()""".format(charge=self.charge, mult=repr(self.multiplicity), cache=in
         
             with open(jobdata["jsfile"], "w") as jshandle:
                 json.dump(records, jshandle, sort_keys=True, indent=2)
+
+            shutil.copy(jobdata["tmpdir"]+'/last.xyz',jobdata["geometry"])
 
             if not self.noclean:
                 os.system("rm -rf {0}".format(jobdata["tmpdir"]))
@@ -479,6 +496,7 @@ model.run()""".format(charge=self.charge, mult=repr(self.multiplicity), cache=in
 
         #Works on Linux
         try:
+            hthread=2
             with open("/proc/cpuinfo") as infile:
                 data = infile.read()
             for line in data.split("\n"):
@@ -492,6 +510,7 @@ model.run()""".format(charge=self.charge, mult=repr(self.multiplicity), cache=in
             #assume hyperthreading if intel processor, use only real cores
             if not amd:
                 nproc /= 2
+#                nproc = int(psutil.cpu_count(logical=False))
 
         #Works on OS X
         except IOError:
@@ -513,7 +532,7 @@ def main(args):
                    args.nproc, args.memory, args.tmpdir, args.verbose,
                    args.noclean, args.force)
         deck = m.get_deck()
-    except Exception, E:
+    except Exception as E:
         return True
 
     m.run_and_extract(deck)
@@ -552,7 +571,7 @@ def csvmain(args):
                       "memory" : args.memory,
                       "geofile" : "none",
                       "summary" : "Did not run"}
-            
+
         else:
             m = Runner(args.model, row["System"], row["Charge"],
                        row["Multiplicity"], args.nproc, args.memory, args.tmpdir,
@@ -579,8 +598,8 @@ def csvmain(args):
             successes.append(s)
             csvwrite(outname, successes, header)
 
-    print "{} of {} jobs successfully ran".format(len(rows) - len(failures),
-                                                  len(rows))
+    print("{} of {} jobs successfully ran".format(len(rows) - len(failures),
+                                                  len(rows)) )
     if failures:
         print("Failures:")
         pprint.pprint(failures)
